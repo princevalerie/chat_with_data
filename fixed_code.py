@@ -12,9 +12,8 @@ import plotly.graph_objs as go
 from PIL import Image
 
 from openai import OpenAI
-from pandasai import SmartDataframe
+import pandasai
 from pandasai.llm.openai import OpenAI as PandasAI_OpenAI
-from pandasai.responses.response_parser import ResponseParser
 
 # Load environment variables from .env file
 load_dotenv()
