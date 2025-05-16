@@ -8,7 +8,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import plotly.graph_objs as go
 import tempfile
-from pandasai import SmartDataframe, SmartDatalake
+import pandasai as pai
 from pandasai.llm import Gemini
 from pandasai.responses.response_parser import ResponseParser
 import json
@@ -81,8 +81,6 @@ def create_thinking_agent(api_key):
                 vizualization_needs = []
                 
                 # Tambahkan kebutuhan visualisasi berdasarkan konteks query
-                # Tanpa membatasi jumlah atau jenis visualisasi
-                # Biarkan PandasAI menentukan visualisasi terbaik
                 if "trend" in query.lower() or "tren" in query.lower():
                     vizualization_needs.append({"description": "Visualisasi untuk menunjukkan tren dari waktu ke waktu"})
                 
@@ -136,7 +134,7 @@ def create_thinking_agent(api_key):
             except Exception as e:
                 log_error(f"Error dalam analisis query: {e}")
                 return json.dumps({"error": str(e)})
-    
+        
     return ThinkingAgent(api_key)
 
 # -----------------------------------------------------------------------------
@@ -151,20 +149,20 @@ def create_visualization_agent(dataframes, api_key):
     
     try:
         llm = Gemini(api_key=api_key, model="gemini-2.0-flash")
-        sdf_list = []
+        pai_dataframes = []
         
         for name, df in dataframes.items():
-            sdf = SmartDataframe(df, name=name)
-            sdf.config = {"llm": llm, "response_parser": StreamlitResponse(st)}
-            sdf_list.append(sdf)
+            # Buat semantic layer untuk setiap dataframe
+            pai_df = pai.create(
+                path=f"data/{name}",
+                df=df,
+                description=f"Data from {name}",
+                columns={col: {"type": str(df[col].dtype), "description": f"Column {col}"} 
+                        for col in df.columns}
+            )
+            pai_dataframes.append(pai_df)
         
-        datalake = SmartDatalake(sdf_list, config={
-            "llm": llm, 
-            "response_parser": StreamlitResponse,
-            "open_charts": True
-        })
-        
-        return datalake
+        return pai_dataframes
     except Exception as e:
         log_error(f"Error creating visualization agent: {e}")
         return None
@@ -201,10 +199,10 @@ def create_recommendation_agent(api_key):
                 }
                 
                 return json.dumps(recommendations)
-            except Exception as e:
+        except Exception as e:
                 log_error(f"Error dalam membuat rekomendasi: {e}")
                 return json.dumps({"error": str(e)})
-    
+        
     return RecommendationAgent(api_key)
 
 # -----------------------------------------------------------------------------
@@ -315,169 +313,132 @@ def main():
                         st.session_state.answer_cache.clear()  # Refresh output cache
                         
                         with st.spinner("Menganalisis data Anda..."):
-                            # Basic Analysis dengan SmartDataframe saja tetapi menggunakan model Gemini
                             try:
-                                from pandasai.llm import Gemini
-                                from pandasai.callbacks import BaseCallback
-                                
-                                # Callback untuk menampilkan kode
-                                class StreamlitCallback(BaseCallback):
-                                    def __init__(self, container) -> None:
-                                        """Initialize callback handler."""
-                                        self.container = container
-
-                                    def on_code(self, response: str):
-                                        self.container.code(response)
-                                
-                                # Container untuk output
-                                container = st.container()
-                                
                                 # Gunakan dataframe pertama jika ada beberapa
                                 df_name, df = next(iter(st.session_state.dataframes.items()))
                                 
-                                # Initialize LLM with Gemini
-                                llm = Gemini(api_key=gemini_api_key, model="gemini-2.0-flash")
-                                
-                                # Create SmartDataframe
-                                query_engine = SmartDataframe(
-                                    df,
-                                    config={
-                                        "llm": llm,
-                                        "response_parser": StreamlitResponse,
-                                        "callback": StreamlitCallback(container),
-                                    },
+                                # Buat semantic layer untuk dataframe
+                                pai_df = pai.create(
+                                    path=f"data/{df_name}",
+                                    df=df,
+                                    description=f"Data from {df_name}",
+                                    columns={col: {"type": str(df[col].dtype), "description": f"Column {col}"} 
+                                            for col in df.columns}
                                 )
                                 
                                 # Get answer
-                                answer = query_engine.chat(prompt)
+                                response = pai_df.chat(prompt)
+                                st.write(response)
                                 
                             except Exception as e:
                                 log_error(f"Error dalam Basic Analysis: {e}")
                                 st.error(f"Terjadi kesalahan: {e}")
                 
-                # Advanced Analysis Mode (kode yang sudah ada sebelumnya)
+                # Advanced Analysis Mode
                 else:
                     if not gemini_api_key:
                         st.error("Mohon masukkan Gemini API Key terlebih dahulu!")
                     else:
-                        st.session_state.answer_cache.clear()  # Refresh output cache
+                st.session_state.answer_cache.clear()  # Refresh output cache
+                
+                with st.spinner("Menganalisis query Anda..."):
+                    # 1. Thinking Agent - Analisis konteks
+                    thinking_agent = create_thinking_agent(gemini_api_key)
+                    data_info = {name: {"columns": list(df.columns), "rows": len(df)} 
+                                for name, df in st.session_state.dataframes.items()}
+                    
+                        thinking_result = thinking_agent.analyze_query(prompt, json.dumps(data_info))
                         
-                        with st.spinner("Menganalisis query Anda..."):
-                            # 1. Thinking Agent - Analisis konteks
-                            thinking_agent = create_thinking_agent(gemini_api_key)
-                            data_info = {name: {"columns": list(df.columns), "rows": len(df)} 
-                                        for name, df in st.session_state.dataframes.items()}
-                            
-                            thinking_result = thinking_agent.analyze_query(prompt, json.dumps(data_info))
-                                
-                            st.session_state.thinking_result = json.loads(thinking_result)
-                            
-                            # Tampilkan hasil thinking agent
-                            with st.expander("Hasil Analisis Konteks", expanded=True):
-                                st.json(thinking_result)
+                    st.session_state.thinking_result = json.loads(thinking_result)
+                    
+                    # Tampilkan hasil thinking agent
+                    with st.expander("Hasil Analisis Konteks", expanded=True):
+                        st.json(thinking_result)
+                
+                with st.spinner("Membuat visualisasi..."):
+                    # 2. Visualization Agent - Visualisasi dengan PandasAI
+                            visualization_agents = create_visualization_agent(st.session_state.dataframes, gemini_api_key)
+                    
+                            if visualization_agents:
+                        # Ekstrak rencana dari thinking agent
+                        thinking_data = st.session_state.thinking_result
+                        output_types = thinking_data.get("output_types", ["text", "visualization"])
                         
-                        with st.spinner("Membuat visualisasi..."):
-                            # 2. Visualization Agent - Visualisasi dengan PandasAI
-                            visualization_agent = create_visualization_agent(st.session_state.dataframes, gemini_api_key)
-                            
-                            if visualization_agent:
-                                # Ekstrak rencana dari thinking agent
-                                thinking_data = st.session_state.thinking_result
-                                output_types = thinking_data.get("output_types", ["text", "visualization"])
-                                
-                                # 1. Selalu buat penjelasan teks terlebih dahulu
-                                if "text" in output_types:
-                                    explanation_prompt = f"Berikan penjelasan tekstual komprehensif tentang: {prompt}"
-                                    try:
-                                        visualization_agent.chat(explanation_prompt)
-                                    except Exception as e:
-                                        log_error(f"Error dalam membuat penjelasan: {e}")
-                                
-                                # 2. Buat tabel jika diminta - gabungkan semua kebutuhan tabel
-                                if "table" in output_types and thinking_data.get("tables"):
-                                    table_descriptions = [table["description"] for table in thinking_data.get("tables", [])]
-                                    combined_table_prompt = f"""Berdasarkan query: '{prompt}'
-                                    
-                                    Buatkan analisis tabular yang mencakup semua aspek berikut:
-                                    - {', '.join(table_descriptions)}
-                                    
-                                    Tampilkan dalam format tabel yang paling informatif.
-                                    """
-                                    
-                                    try:
-                                        visualization_agent.chat(combined_table_prompt)
-                                    except Exception as e:
-                                        log_error(f"Error dalam membuat tabel: {e}")
-                                        
-                                        # Fallback jika gagal, coba pendekatan terpisah
-                                        for table_info in thinking_data.get("tables", []):
-                                            table_prompt = f"Buat tabel untuk {table_info.get('description', 'analisis data')} berdasarkan query: {prompt}"
-                                            try:
-                                                visualization_agent.chat(table_prompt)
-                                            except Exception as e:
-                                                log_error(f"Error dalam membuat tabel untuk {table_info.get('description')}: {e}")
-                                
-                                # 3. Buat visualisasi - gabungkan semua kebutuhan visualisasi
-                                visualizations = thinking_data.get("visualizations", [])
-                                if visualizations and "visualization" in output_types:
-                                    # Buat prompt untuk semua visualisasi sekaligus, biarkan PandasAI yang memutuskan
-                                    viz_descriptions = [viz['description'] for viz in visualizations]
-                                    combined_viz_prompt = f"""Menganalisis data berdasarkan query: '{prompt}'
-                                    
-                                    Buatkan analisis visual yang komprehensif dengan kebutuhan:
-                                    - {', '.join(viz_descriptions)}
-                                    
-                                    Pilih jenis visualisasi yang paling optimal untuk setiap kebutuhan tersebut.
-                                    """
-                                    
-                                    try:
-                                        visualization_agent.chat(combined_viz_prompt)
-                                    except Exception as e:
-                                        log_error(f"Error dalam membuat visualisasi: {e}")
-                                        
-                                        # Fallback jika gagal, coba pendekatan terpisah
-                                        for viz in visualizations:
-                                            viz_prompt = f"Buat visualisasi yang tepat untuk: {viz['description']} berdasarkan query: {prompt}"
-                                            try:
-                                                visualization_agent.chat(viz_prompt)
-                                            except Exception as e:
-                                                log_error(f"Error dalam visualisasi untuk {viz['description']}: {e}")
-                                else:
-                                    # Fallback jika tidak ada visualisasi yang direkomendasikan
-                                    viz_fallback_prompt = f"Buat visualisasi yang paling informatif untuk query: {prompt}"
-                                    try:
-                                        visualization_agent.chat(viz_fallback_prompt)
-                                    except Exception as e:
-                                        log_error(f"Error dalam membuat visualisasi fallback: {e}")
+                                # Proses setiap dataframe dengan PandasAI
+                                for pai_df in visualization_agents:
+                        # 1. Selalu buat penjelasan teks terlebih dahulu
+                        if "text" in output_types:
+                            explanation_prompt = f"Berikan penjelasan tekstual komprehensif tentang: {prompt}"
+                            try:
+                                            response = pai_df.chat(explanation_prompt)
+                                            st.write(response)
+                            except Exception as e:
+                                log_error(f"Error dalam membuat penjelasan: {e}")
                         
-                        # 3. Recommendation Agent - jika diaktifkan
-                        if st.session_state.rec_agent_enabled:
-                            with st.spinner("Membuat rekomendasi strategi..."):
-                                recommendation_agent = create_recommendation_agent(gemini_api_key)
+                                    # 2. Buat tabel jika diminta
+                        if "table" in output_types and thinking_data.get("tables"):
+                            table_descriptions = [table["description"] for table in thinking_data.get("tables", [])]
+                            combined_table_prompt = f"""Berdasarkan query: '{prompt}'
+                            
+                            Buatkan analisis tabular yang mencakup semua aspek berikut:
+                            - {', '.join(table_descriptions)}
+                            
+                            Tampilkan dalam format tabel yang paling informatif.
+                            """
+                            
+                            try:
+                                            response = pai_df.chat(combined_table_prompt)
+                                            st.write(response)
+                            except Exception as e:
+                                log_error(f"Error dalam membuat tabel: {e}")
                                 
-                                recommendations = recommendation_agent.generate_recommendations(
-                                    thinking_result,
-                                    json.dumps(st.session_state.answer_cache)
-                                )
-                                
-                                # Tampilkan rekomendasi
-                                st.subheader("🚀 Rekomendasi Strategi")
-                                rec_data = json.loads(recommendations)
-                                
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.write("**Wawasan Kunci:**")
-                                    for insight in rec_data.get("key_insights", []):
-                                        st.write(f"- {insight}")
-                                
-                                with col2:
-                                    st.write("**Rekomendasi:**")
-                                    for rec in rec_data.get("recommendations", []):
-                                        st.write(f"- {rec}")
-                                
-                                st.write("**Langkah Selanjutnya:**")
-                                for step in rec_data.get("next_steps", []):
-                                    st.write(f"- {step}")
+                                    # 3. Buat visualisasi
+                                    if "visualization" in output_types:
+                        visualizations = thinking_data.get("visualizations", [])
+                                        if visualizations:
+                            viz_descriptions = [viz['description'] for viz in visualizations]
+                            combined_viz_prompt = f"""Menganalisis data berdasarkan query: '{prompt}'
+                            
+                            Buatkan analisis visual yang komprehensif dengan kebutuhan:
+                            - {', '.join(viz_descriptions)}
+                            
+                            Pilih jenis visualisasi yang paling optimal untuk setiap kebutuhan tersebut.
+                            """
+                            
+                            try:
+                                                response = pai_df.chat(combined_viz_prompt)
+                                                st.write(response)
+                            except Exception as e:
+                                log_error(f"Error dalam membuat visualisasi: {e}")
+                
+                # 3. Recommendation Agent - jika diaktifkan
+                if st.session_state.rec_agent_enabled:
+                    with st.spinner("Membuat rekomendasi strategi..."):
+                        recommendation_agent = create_recommendation_agent(gemini_api_key)
+                        
+                            recommendations = recommendation_agent.generate_recommendations(
+                                thinking_result,
+                                json.dumps(st.session_state.answer_cache)
+                            )
+                        
+                        # Tampilkan rekomendasi
+                        st.subheader("🚀 Rekomendasi Strategi")
+                        rec_data = json.loads(recommendations)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write("**Wawasan Kunci:**")
+                            for insight in rec_data.get("key_insights", []):
+                                st.write(f"- {insight}")
+                        
+                        with col2:
+                            st.write("**Rekomendasi:**")
+                            for rec in rec_data.get("recommendations", []):
+                                st.write(f"- {rec}")
+                        
+                        st.write("**Langkah Selanjutnya:**")
+                        for step in rec_data.get("next_steps", []):
+                            st.write(f"- {step}")
     else:
         st.info("Upload file Excel atau CSV untuk memulai analisis.")
 
