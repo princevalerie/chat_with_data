@@ -1,11 +1,10 @@
-# Kompatibel dengan Python 3.9 - 3.11
 streamlit
-python-dotenv.0
-openai>=0.27.0
-pandas>=1.3.0
-numpy>=1.21.0
+python-dotenv
+openai
+pandas
+numpy
 pandasai
 pandasai-openai
-plotly>=5.0.0
-matplotlib>=3.4.0
-Pillow>=8.0.0
+plotly
+matplotlib
+Pillow
