@@ -3,7 +3,7 @@ python-dotenv
 openai
 pandas
 numpy
-pandasai
+pandasai==1.4.10
 pandasai-openai
 plotly
 matplotlib
