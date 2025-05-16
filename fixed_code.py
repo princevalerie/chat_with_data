@@ -12,7 +12,7 @@ import plotly.graph_objs as go
 from PIL import Image
 
 import pandasai
-from pandasai.llm import GoogleGemini
+from pandasai.llm import Gemini
 from pandasai.responses.response_parser import ResponseParser
 
 # Load environment variables from .env file
