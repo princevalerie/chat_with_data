@@ -11,8 +11,9 @@ import matplotlib.pyplot as plt
 import plotly.graph_objs as go
 from PIL import Image
 
-import pandasai
-from pandasai.llm import GoogleGemini
+from openai import OpenAI
+from pandasai import SmartDataframe
+from pandasai.llm.openai import OpenAI as PandasAI_OpenAI
 from pandasai.responses.response_parser import ResponseParser
 
 # Load environment variables from .env file
@@ -59,81 +60,62 @@ def create_thinking_agent(api_key):
     class ThinkingAgent:
         def __init__(self, api_key):
             self.api_key = api_key
-            self.llm = GoogleGemini(api_key=api_key, model="gemini-pro")
+            self.client = OpenAI(api_key=api_key)
         
         def analyze_query(self, query, data_info):
             """Analyze query for data context"""
             try:
-                # Ekstrak informasi data
-                data_context = json.loads(data_info) if isinstance(data_info, str) else data_info
+                # Create prompt for OpenAI
+                prompt = f"""
+                Analyze the following data analysis query and provide a structured analysis plan.
                 
-                # Buat rencana analisis dasar terbuka (tanpa membatasi)
-                analysis = {
+                Query: {query}
+                Data Information: {data_info}
+                
+                Create a comprehensive analysis plan that includes:
+                1. Understanding of what the query is asking
+                2. Analysis approach plan
+                3. What visualizations would be most appropriate
+                4. What tables or data summaries would be helpful
+                
+                Return the response in this JSON format:
+                {{
+                    "understanding": "brief understanding of the query",
+                    "plan": "analysis plan",
+                    "text_explanation_needed": true/false,
+                    "output_types": ["text", "visualization", "table"],
+                    "visualizations": [
+                        {{"description": "description of visualization needed"}}
+                    ],
+                    "tables": [
+                        {{"description": "description of table needed"}}
+                    ]
+                }}
+                """
+                
+                response = self.client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are a data analysis expert that creates comprehensive analysis plans."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7,
+                    response_format={"type": "json_object"}
+                )
+                
+                return response.choices[0].message.content
+                
+            except Exception as e:
+                log_error(f"Error dalam analisis query: {e}")
+                # Return default analysis structure
+                return json.dumps({
                     "understanding": f"Analisis data berdasarkan query: {query}",
                     "plan": "Rencana analisis fleksibel berdasarkan kebutuhan data",
                     "text_explanation_needed": True,
                     "output_types": ["text", "visualization"],
-                    "visualizations": [],
+                    "visualizations": [{"description": "Visualisasi yang paling informatif sesuai data"}],
                     "tables": []
-                }
-                
-                # Deteksi kebutuhan visualisasi dari query tanpa membatasi jenis
-                visualization_needs = []
-                
-                # Tambahkan kebutuhan visualisasi berdasarkan konteks query
-                if "trend" in query.lower() or "tren" in query.lower():
-                    visualization_needs.append({"description": "Visualisasi untuk menunjukkan tren dari waktu ke waktu"})
-                
-                if "compare" in query.lower() or "bandingkan" in query.lower() or "perbandingan" in query.lower():
-                    visualization_needs.append({"description": "Visualisasi untuk membandingkan nilai antar kategori"})
-                    
-                if "distribution" in query.lower() or "distribusi" in query.lower():
-                    visualization_needs.append({"description": "Visualisasi untuk menunjukkan distribusi data"})
-                    
-                if "relationship" in query.lower() or "hubungan" in query.lower() or "korelasi" in query.lower():
-                    visualization_needs.append({"description": "Visualisasi untuk menunjukkan hubungan antar variabel"})
-                    
-                if "part of whole" in query.lower() or "bagian dari" in query.lower() or "proporsi" in query.lower():
-                    visualization_needs.append({"description": "Visualisasi untuk menunjukkan proporsi atau bagian dari keseluruhan"})
-                
-                # Untuk query umum, tambahkan visualisasi umum
-                if not visualization_needs:
-                    visualization_needs.append({"description": "Visualisasi yang paling informatif sesuai data"})
-                
-                # Jika query mengandung kata-kata yang menunjukkan analisis mendalam, tambahkan beberapa visualisasi
-                if any(word in query.lower() for word in ["detail", "mendalam", "komprehensif", "lengkap", "advanced", "lanjut", "complex"]):
-                    if len(visualization_needs) < 2:
-                        visualization_needs.append({"description": "Visualisasi tambahan untuk menunjukkan aspek lain dari data"})
-                        visualization_needs.append({"description": "Visualisasi untuk insight tersembunyi dalam data"})
-                
-                # Deteksi kebutuhan tabel
-                table_needs = []
-                
-                # Jika query membutuhkan numerik atau statistik
-                if any(word in query.lower() for word in ["tabel", "table", "angka", "statistik", "rata-rata", "jumlah", "perhitungan", "ringkasan"]):
-                    table_needs.append({"description": "Tabel yang menunjukkan data utama dari query"})
-                    
-                # Jika query menunjukkan kebutuhan perbandingan rinci
-                if any(word in query.lower() for word in ["bandingkan", "perbandingan", "detail", "rinci"]):
-                    table_needs.append({"description": "Tabel ringkasan untuk perbandingan kategori"})
-                    
-                # Untuk analisis lanjutan, selalu sediakan tabel ringkasan
-                if any(word in query.lower() for word in ["lanjut", "advanced", "mendalam", "komprehensif"]):
-                    if not table_needs:
-                        table_needs.append({"description": "Tabel ringkasan statistik dari data"})
-                
-                # Tambahkan semua kebutuhan yang terdeteksi
-                analysis["visualizations"] = visualization_needs
-                analysis["tables"] = table_needs
-                
-                # Jika butuh tabel, tambahkan ke output_types
-                if table_needs:
-                    analysis["output_types"].append("table")
-                
-                return json.dumps(analysis)
-            except Exception as e:
-                log_error(f"Error dalam analisis query: {e}")
-                return json.dumps({"error": str(e)})
+                })
         
     return ThinkingAgent(api_key)
 
@@ -148,12 +130,13 @@ def create_visualization_agent(dataframes, api_key):
         return None
     
     try:
-        llm = GoogleGemini(api_key=api_key, model="gemini-pro")
+        # Gunakan OpenAI untuk PandasAI
+        llm = PandasAI_OpenAI(api_key=api_key, model="gpt-3.5-turbo")
         pandas_ai_dfs = []
         
         for name, df in dataframes.items():
             # Create PandasAI SmartDataframe for each dataframe
-            smart_df = pandasai.SmartDataframe(
+            smart_df = SmartDataframe(
                 df, 
                 config={
                     "llm": llm,
@@ -180,13 +163,50 @@ def create_recommendation_agent(api_key):
     class RecommendationAgent:
         def __init__(self, api_key):
             self.api_key = api_key
-            self.llm = GoogleGemini(api_key=api_key, model="gemini-pro")
+            self.client = OpenAI(api_key=api_key)
         
         def generate_recommendations(self, analysis_result, visualization_result):
             """Generate recommendations based on analysis and visualization results"""
             try:
-                # Untuk implementasi sederhana, langsung buat rekomendasi dasar
-                recommendations = {
+                prompt = f"""
+                Based on the following analysis and visualization results, provide strategic recommendations.
+                
+                Analysis Context: {analysis_result}
+                Visualization Results: {visualization_result}
+                
+                Provide recommendations in this JSON format:
+                {{
+                    "key_insights": [
+                        "insight 1",
+                        "insight 2"
+                    ],
+                    "recommendations": [
+                        "recommendation 1",
+                        "recommendation 2"
+                    ],
+                    "next_steps": [
+                        "next step 1",
+                        "next step 2"
+                    ]
+                }}
+                """
+                
+                response = self.client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are a strategic business analyst providing data-driven recommendations."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7,
+                    response_format={"type": "json_object"}
+                )
+                
+                return response.choices[0].message.content
+                
+            except Exception as e:
+                log_error(f"Error dalam membuat rekomendasi: {e}")
+                # Return default recommendations
+                return json.dumps({
                     "key_insights": [
                         "Wawasan 1 berdasarkan data",
                         "Wawasan 2 berdasarkan data"
@@ -199,12 +219,7 @@ def create_recommendation_agent(api_key):
                         "Langkah selanjutnya 1",
                         "Langkah selanjutnya 2"
                     ]
-                }
-                
-                return json.dumps(recommendations)
-            except Exception as e:
-                log_error(f"Error dalam membuat rekomendasi: {e}")
-                return json.dumps({"error": str(e)})
+                })
         
     return RecommendationAgent(api_key)
 
@@ -262,11 +277,11 @@ def main():
             index=1 if st.session_state.analysis_mode == "Advanced Analysis" else 0
         )
         
-        # API Keys (menggunakan Gemini untuk kedua mode)
-        gemini_api_key = st.text_input("Gemini API Key", 
-                              value=os.getenv("GEMINI_API_KEY", ""),
+        # API Keys (sekarang hanya OpenAI)
+        openai_api_key = st.text_input("OpenAI API Key", 
+                              value=os.getenv("OPENAI_API_KEY", ""),
                               type="password", 
-                              key="gemini_api_key")
+                              key="openai_api_key")
         
         st.header("📊 Upload Data")
         uploaded_file = st.file_uploader("Upload Excel or CSV file", type=['csv', 'xlsx', 'xls'])
@@ -310,8 +325,8 @@ def main():
             if submitted and prompt:
                 # Basic Analysis Mode
                 if st.session_state.analysis_mode == "Basic Analysis":
-                    if not gemini_api_key:
-                        st.error("Mohon masukkan Gemini API Key terlebih dahulu!")
+                    if not openai_api_key:
+                        st.error("Mohon masukkan OpenAI API Key terlebih dahulu!")
                     else:
                         st.session_state.answer_cache.clear()  # Refresh output cache
                         
@@ -321,10 +336,11 @@ def main():
                                 df_name, df = next(iter(st.session_state.dataframes.items()))
                                 
                                 # Create SmartDataframe with config
-                                smart_df = pandasai.SmartDataframe(
+                                llm = PandasAI_OpenAI(api_key=openai_api_key, model="gpt-3.5-turbo")
+                                smart_df = SmartDataframe(
                                     df,
                                     config={
-                                        "llm": GoogleGemini(api_key=gemini_api_key, model="gemini-pro"),
+                                        "llm": llm,
                                         "response_parser": StreamlitResponse,
                                         "enable_cache": False,
                                         "save_logs": False,
@@ -341,14 +357,14 @@ def main():
                 
                 # Advanced Analysis Mode
                 else:
-                    if not gemini_api_key:
-                        st.error("Mohon masukkan Gemini API Key terlebih dahulu!")
+                    if not openai_api_key:
+                        st.error("Mohon masukkan OpenAI API Key terlebih dahulu!")
                     else:
                         st.session_state.answer_cache.clear()  # Refresh output cache
                         
                         with st.spinner("Menganalisis query Anda..."):
                             # 1. Thinking Agent - Analisis konteks
-                            thinking_agent = create_thinking_agent(gemini_api_key)
+                            thinking_agent = create_thinking_agent(openai_api_key)
                             data_info = {name: {"columns": list(df.columns), "rows": len(df)} 
                                         for name, df in st.session_state.dataframes.items()}
                             
@@ -362,7 +378,7 @@ def main():
                         
                         with st.spinner("Membuat visualisasi..."):
                             # 2. Visualization Agent - Visualisasi dengan PandasAI
-                            visualization_agents = create_visualization_agent(st.session_state.dataframes, gemini_api_key)
+                            visualization_agents = create_visualization_agent(st.session_state.dataframes, openai_api_key)
                             
                             if visualization_agents:
                                 # Ekstrak rencana dari thinking agent
@@ -418,7 +434,7 @@ def main():
                         # 3. Recommendation Agent - jika diaktifkan
                         if st.session_state.rec_agent_enabled:
                             with st.spinner("Membuat rekomendasi strategi..."):
-                                recommendation_agent = create_recommendation_agent(gemini_api_key)
+                                recommendation_agent = create_recommendation_agent(openai_api_key)
                                 
                                 recommendations = recommendation_agent.generate_recommendations(
                                     thinking_result,
