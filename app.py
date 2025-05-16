@@ -8,7 +8,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import plotly.graph_objs as go
 import tempfile
-import pandasai as pai
+from pandasai import SmartDataframe, SmartDatalake
 from pandasai.llm import Gemini
 from pandasai.responses.response_parser import ResponseParser
 import json
