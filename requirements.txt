@@ -4,7 +4,7 @@ openai
 pandas
 numpy
 pandasai==1.4.10
-pandasai-openai
+pandasai-openai==0.1.0
 plotly
 matplotlib
 Pillow
